@@ -24,6 +24,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Create .env.production from Secrets
+        run: |
+          echo "VITE_GIST_ID=${{ secrets.VITE_GIST_ID }}" > .env.production
+          echo "VITE_GITHUB_TOKEN=${{ secrets.VITE_GITHUB_TOKEN }}" >> .env.production
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -7,3 +7,6 @@ dist
 .env.local
 .env.development
 .trae
+.github-token
+.secrets
+.env.production
