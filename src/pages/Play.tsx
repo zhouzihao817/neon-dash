@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { GameEngine, type GameResult, type Achievement } from "../game/engine";
 import { useGameStore } from "../game/store";
-import { SKINS, POWERUPS, getComboMultiplier, type PowerUpType } from "../game/config";
+import { SKINS, POWERUPS, REVIVE_CONFIG, getComboMultiplier, getSkinEffects, type PowerUpType } from "../game/config";
 import { audio } from "../game/audio";
 
 export default function Play() {
@@ -19,6 +19,10 @@ export default function Play() {
   const getMembershipMultiplier = useGameStore((s) => s.getMembershipMultiplier);
   const submitScoreToServer = useGameStore((s) => s.submitScoreToServer);
   const syncToServer = useGameStore((s) => s.syncToServer);
+  // 续命所需: 钻石/钥匙余额与扣减方法
+  const diamond = useGameStore((s) => s.diamond);
+  const keys = useGameStore((s) => s.keys);
+  const spendForRevive = useGameStore((s) => s.spendForRevive);
 
   const skin = SKINS.find((s) => s.id === equippedId) || SKINS[0];
 
@@ -46,6 +50,16 @@ export default function Play() {
   const [countdown, setCountdown] = useState(3);
   const [started, setStarted] = useState(false);
   const [achievementToast, setAchievementToast] = useState<Achievement | null>(null);
+  // 续命对话框状态
+  const [showReviveDialog, setShowReviveDialog] = useState(false);
+  const [currentReviveCount, setCurrentReviveCount] = useState(0);
+  // 续命信息(是否免费/付费索引/剩余免费次数)
+  const [reviveInfo, setReviveInfo] = useState<{
+    isFree: boolean;
+    paidReviveCount: number;
+    freeReviveLeft: number;
+    freeReviveCount: number;
+  } | null>(null);
 
   const handleGameOver = useCallback(
     (result: GameResult) => {
@@ -90,6 +104,53 @@ export default function Play() {
     }, 3000);
   }, [addDiamond, addKeys, getMembershipMultiplier]);
 
+  // 续命请求回调: 引擎在玩家死亡且可续命时触发
+  const handleReviveRequest = useCallback((reviveCount: number) => {
+    setCurrentReviveCount(reviveCount);
+    setReviveInfo(engineRef.current?.getReviveInfo() ?? null);
+    setShowReviveDialog(true);
+  }, []);
+
+  // 免费续命(皮肤效果)
+  const handleReviveFree = () => {
+    audio.sfxPowerUp();
+    engineRef.current?.revive();
+    setShowReviveDialog(false);
+  };
+
+  // 用钻石续命
+  const handleReviveWithDiamond = () => {
+    const paidIdx = reviveInfo?.paidReviveCount ?? currentReviveCount;
+    const cost = REVIVE_CONFIG.costs[paidIdx]?.diamond ?? 0;
+    if (!spendForRevive("diamond", cost)) {
+      audio.sfxComboBreak();
+      return;
+    }
+    audio.sfxPowerUp();
+    engineRef.current?.revive();
+    setShowReviveDialog(false);
+  };
+
+  // 用钥匙续命
+  const handleReviveWithKeys = () => {
+    const paidIdx = reviveInfo?.paidReviveCount ?? currentReviveCount;
+    const cost = REVIVE_CONFIG.costs[paidIdx]?.keys ?? 0;
+    if (!spendForRevive("keys", cost)) {
+      audio.sfxComboBreak();
+      return;
+    }
+    audio.sfxPowerUp();
+    engineRef.current?.revive();
+    setShowReviveDialog(false);
+  };
+
+  // 放弃续命,直接结算
+  const handleGiveUpRevive = () => {
+    audio.sfxClick();
+    setShowReviveDialog(false);
+    engineRef.current?.confirmGameOver();
+  };
+
   useEffect(() => {
     if (!canvasRef.current) return;
     audio.init();
@@ -111,9 +172,11 @@ export default function Play() {
         onGameOver: handleGameOver,
         onSlowMotion: setSlowMotion,
         onAchievement: handleAchievement,
+        onReviveRequest: handleReviveRequest,
       },
       skin.color,
       skin.trailColor,
+      getSkinEffects(equippedId),
     );
     engineRef.current = engine;
 
@@ -391,6 +454,169 @@ export default function Play() {
             </div>
           )}
         </>
+      )}
+
+      {/* 续命对话框 */}
+      {showReviveDialog && (
+        <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div
+            className="relative max-w-sm w-full mx-4 p-6 rounded-2xl"
+            style={{
+              background: "rgba(10, 10, 20, 0.95)",
+              border: "2px solid #FF2D95",
+              boxShadow: "0 0 40px #FF2D95, 0 0 80px #FF2D9580",
+            }}
+          >
+            {/* 标题 */}
+            <div className="text-center mb-1">
+              <div className="font-mono text-xs text-neon-pink/70 mb-1">
+                ★ SYSTEM ALERT ★
+              </div>
+              <h3 className="font-orbitron text-3xl font-black neon-text-pink">
+                继续冲刺?
+              </h3>
+            </div>
+
+            {/* 复活次数指示(含免费复活次数) */}
+            <div className="flex items-center justify-center gap-2 my-4 flex-wrap">
+              {Array.from({ length: REVIVE_CONFIG.maxRevives }).map((_, i) => {
+                // 付费复活槽: 已使用的付费次数高亮
+                const paidUsed = reviveInfo?.paidReviveCount ?? 0;
+                const used = i < paidUsed;
+                return (
+                  <div
+                    key={`paid-${i}`}
+                    className="w-3 h-3 rounded-full transition-all"
+                    style={{
+                      background: used ? "#FF2D95" : "transparent",
+                      border: "1px solid #FF2D95",
+                      boxShadow: used ? "0 0 8px #FF2D95" : "none",
+                    }}
+                  />
+                );
+              })}
+              {Array.from({
+                length: reviveInfo?.freeReviveCount ?? 0,
+              }).map((_, i) => {
+                // 免费复活槽: 剩余的高亮绿色
+                const freeLeft = reviveInfo?.freeReviveLeft ?? 0;
+                const used = i >= freeLeft;
+                return (
+                  <div
+                    key={`free-${i}`}
+                    className="w-3 h-3 rounded-full transition-all"
+                    style={{
+                      background: used ? "transparent" : "#00FFAA",
+                      border: "1px solid #00FFAA",
+                      boxShadow: used ? "none" : "0 0 8px #00FFAA",
+                    }}
+                  />
+                );
+              })}
+              <span className="font-mono text-xs text-neon-pink/70 ml-2">
+                第 {currentReviveCount + 1}/
+                {REVIVE_CONFIG.maxRevives +
+                  (reviveInfo?.freeReviveCount ?? 0)}{" "}
+                次复活
+              </span>
+            </div>
+
+            {/* 当前资产 */}
+            <div className="flex items-center justify-center gap-4 mb-4 font-mono text-sm">
+              <span className="neon-text-blue">◆ {diamond}</span>
+              <span className="neon-text-purple">🔑 {keys}</span>
+            </div>
+
+            {/* 免费复活按钮(皮肤效果, 仅有免费次数时显示) */}
+            {reviveInfo?.isFree ? (
+              <button
+                onClick={handleReviveFree}
+                className="w-full py-3 mb-3 rounded-xl font-orbitron text-sm transition-all"
+                style={{
+                  background: "rgba(0, 255, 170, 0.15)",
+                  border: "1px solid #00FFAA",
+                  boxShadow: "0 0 20px #00FFAA80",
+                  color: "#00FFAA",
+                }}
+              >
+                <div>💖 免费复活</div>
+                <div className="font-mono text-xs">
+                  剩余 {reviveInfo.freeReviveLeft} 次
+                </div>
+              </button>
+            ) : (
+              <>
+                {/* 钻石复活按钮 */}
+                <button
+                  onClick={handleReviveWithDiamond}
+                  disabled={
+                    diamond <
+                    (REVIVE_CONFIG.costs[
+                      reviveInfo?.paidReviveCount ?? currentReviveCount
+                    ]?.diamond ?? 0)
+                  }
+                  className="w-full py-3 mb-2 rounded-xl font-orbitron text-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{
+                    background: "rgba(0, 212, 255, 0.15)",
+                    border: "1px solid #00D4FF",
+                    boxShadow: "0 0 15px #00D4FF60",
+                    color: "#00D4FF",
+                  }}
+                >
+                  <div>用钻石复活</div>
+                  <div className="font-mono text-xs">
+                    ◆{" "}
+                    {
+                      REVIVE_CONFIG.costs[
+                        reviveInfo?.paidReviveCount ?? currentReviveCount
+                      ]?.diamond
+                    }
+                  </div>
+                </button>
+
+                {/* 钥匙复活按钮 */}
+                <button
+                  onClick={handleReviveWithKeys}
+                  disabled={
+                    keys <
+                    (REVIVE_CONFIG.costs[
+                      reviveInfo?.paidReviveCount ?? currentReviveCount
+                    ]?.keys ?? 0)
+                  }
+                  className="w-full py-3 mb-3 rounded-xl font-orbitron text-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  style={{
+                    background: "rgba(180, 76, 255, 0.15)",
+                    border: "1px solid #B44CFF",
+                    boxShadow: "0 0 15px #B44CFF60",
+                    color: "#B44CFF",
+                  }}
+                >
+                  <div>用钥匙复活</div>
+                  <div className="font-mono text-xs">
+                    🔑{" "}
+                    {
+                      REVIVE_CONFIG.costs[
+                        reviveInfo?.paidReviveCount ?? currentReviveCount
+                      ]?.keys
+                    }
+                  </div>
+                </button>
+              </>
+            )}
+
+            {/* 放弃按钮 */}
+            <button
+              onClick={handleGiveUpRevive}
+              className="w-full py-2 rounded-xl font-orbitron text-xs neon-text-pink/70 bg-neon-gray/30 hover:bg-neon-gray/50 transition-all"
+            >
+              放弃 (结算)
+            </button>
+
+            <div className="font-mono text-[10px] text-neon-blue/40 text-center mt-3">
+              复活后短暂无敌 {REVIVE_CONFIG.invincibleDuration} 秒
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
