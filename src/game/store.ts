@@ -1,8 +1,17 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { PowerUpType, Rarity } from "./config";
-import { LOTTERY, SKINS } from "./config";
+import type { PowerUpType, Rarity, LotteryRewardType } from "./config";
+import { LOTTERY, SKINS, LOTTERY_REWARDS } from "./config";
 import { api, token, type SaveData } from "./api";
+
+// 抽奖结果(支持皮肤与货币奖励)
+export interface LotteryResult {
+  type: LotteryRewardType;
+  rarity?: Rarity; // 皮肤才有
+  skinId?: string; // 皮肤才有
+  isNew?: boolean; // 皮肤才有
+  amount?: number; // 金币/钻石/钥匙才有
+}
 
 interface LastRunResult {
   score: number;
@@ -63,6 +72,8 @@ interface GameStore extends PlayerData {
   spendGold: (amount: number) => boolean;
   spendDiamond: (amount: number) => boolean;
   spendKeys: (amount: number) => boolean;
+  // 续命消耗: 扣减钻石或钥匙,成功返回true,不足返回false
+  spendForRevive: (currency: "diamond" | "keys", amount: number) => boolean;
 
   // 皮肤操作
   buySkin: (skinId: string) => boolean;
@@ -73,8 +84,8 @@ interface GameStore extends PlayerData {
   upgradePowerUp: (type: PowerUpType) => boolean;
   getPowerUpLevel: (type: PowerUpType) => number;
 
-  // 抽奖
-  lottery: (count: 1 | 10) => { rarity: Rarity; skinId: string; isNew: boolean }[] | null;
+  // 抽奖(返回皮肤或货币奖励)
+  lottery: (count: 1 | 10) => LotteryResult[] | null;
   getFragmentCount: (skinId: string) => number;
   synthesizeSkin: (skinId: string) => boolean;
 
@@ -333,6 +344,11 @@ export const useGameStore = create<GameStore>()(
         set((s) => ({ keys: s.keys - amount }));
         return true;
       },
+      // 续命消耗: 根据货币类型扣减钻石或钥匙
+      spendForRevive: (currency, amount) => {
+        if (currency === "diamond") return get().spendDiamond(amount);
+        return get().spendKeys(amount);
+      },
 
       buySkin: (skinId) => {
         const skin = SKINS.find((s) => s.id === skinId);
@@ -370,64 +386,106 @@ export const useGameStore = create<GameStore>()(
         const cost = count === 1 ? LOTTERY.cost.single : LOTTERY.cost.ten;
         if (!get().spendKeys(cost)) return null;
 
-        const results: { rarity: Rarity; skinId: string; isNew: boolean }[] = [];
+        const results: LotteryResult[] = [];
         const newPity = { ...get().pityCounter };
         const newFragments = { ...get().fragments };
         const newSkins = [...get().skins];
+        // 累积货币奖励,最后统一结算
+        let goldGain = 0;
+        let diamondGain = 0;
+        let keysGain = 0;
+
+        // 奖励类型权重总和
+        const totalWeight = LOTTERY_REWARDS.reduce(
+          (sum, r) => sum + r.weight,
+          0,
+        );
 
         for (let i = 0; i < count; i++) {
-          let rarity: Rarity = 0;
-          const roll = Math.random();
-          let acc = 0;
-          for (let r = 0; r < LOTTERY.probs.length; r++) {
-            acc += LOTTERY.probs[r];
-            if (roll < acc) {
-              rarity = r as Rarity;
-              break;
-            }
-          }
-
-          // 保底检查
-          if (count === 10 && i === 9 && rarity < 1) rarity = 1;
+          // 保底计数器每次抽奖都递增(保底检查仅在抽到皮肤时进行)
           newPity.rare++;
           newPity.epic++;
           newPity.legendary++;
 
-          if (newPity.rare >= LOTTERY.pity[0] && rarity < 1) {
-            rarity = 1;
-            newPity.rare = 0;
-          } else if (rarity >= 1) newPity.rare = 0;
-
-          if (newPity.epic >= LOTTERY.pity[1] && rarity < 2) {
-            rarity = 2;
-            newPity.epic = 0;
-          } else if (rarity >= 2) newPity.epic = 0;
-
-          if (newPity.legendary >= LOTTERY.pity[2] && rarity < 3) {
-            rarity = 3;
-            newPity.legendary = 0;
-          } else if (rarity >= 3) newPity.legendary = 0;
-
-          // 选择皮肤
-          const pool = SKINS.filter((s) => s.rarity === rarity);
-          const skin = pool[Math.floor(Math.random() * pool.length)];
-          const isNew = !newSkins.includes(skin.id);
-
-          if (isNew) {
-            newSkins.push(skin.id);
-          } else {
-            const gain = LOTTERY.fragmentGain[rarity];
-            newFragments[skin.id] = (newFragments[skin.id] || 0) + gain;
+          // 先按权重随机选奖励类型
+          let roll = Math.random() * totalWeight;
+          let rewardType: LotteryRewardType = "gold";
+          for (const r of LOTTERY_REWARDS) {
+            roll -= r.weight;
+            if (roll <= 0) {
+              rewardType = r.type;
+              break;
+            }
           }
 
-          results.push({ rarity, skinId: skin.id, isNew });
+          if (rewardType === "skin") {
+            // === 皮肤奖励: 走原稀有度+保底逻辑 ===
+            let rarity: Rarity = 0;
+            const rarityRoll = Math.random();
+            let acc = 0;
+            for (let r = 0; r < LOTTERY.probs.length; r++) {
+              acc += LOTTERY.probs[r];
+              if (rarityRoll < acc) {
+                rarity = r as Rarity;
+                break;
+              }
+            }
+
+            // 十连保底: 第10抽若是皮肤且稀有度<1,强制>=1
+            if (count === 10 && i === 9 && rarity < 1) rarity = 1;
+
+            // 保底检查(仅影响皮肤抽取,当抽到皮肤时才检查)
+            if (newPity.rare >= LOTTERY.pity[0] && rarity < 1) {
+              rarity = 1;
+              newPity.rare = 0;
+            } else if (rarity >= 1) newPity.rare = 0;
+
+            if (newPity.epic >= LOTTERY.pity[1] && rarity < 2) {
+              rarity = 2;
+              newPity.epic = 0;
+            } else if (rarity >= 2) newPity.epic = 0;
+
+            if (newPity.legendary >= LOTTERY.pity[2] && rarity < 3) {
+              rarity = 3;
+              newPity.legendary = 0;
+            } else if (rarity >= 3) newPity.legendary = 0;
+
+            // 选择皮肤
+            const pool = SKINS.filter((s) => s.rarity === rarity);
+            const skin = pool[Math.floor(Math.random() * pool.length)];
+            const isNew = !newSkins.includes(skin.id);
+
+            if (isNew) {
+              newSkins.push(skin.id);
+            } else {
+              const gain = LOTTERY.fragmentGain[rarity];
+              newFragments[skin.id] =
+                (newFragments[skin.id] || 0) + gain;
+            }
+
+            results.push({ type: "skin", rarity, skinId: skin.id, isNew });
+          } else {
+            // === 非皮肤奖励: 随机生成数量,直接累积到玩家资产 ===
+            const cfg = LOTTERY_REWARDS.find((r) => r.type === rewardType)!;
+            const amount =
+              cfg.minAmount! +
+              Math.floor(Math.random() * (cfg.maxAmount! - cfg.minAmount! + 1));
+            if (rewardType === "gold") goldGain += amount;
+            else if (rewardType === "diamond") diamondGain += amount;
+            else if (rewardType === "keys") keysGain += amount;
+            results.push({ type: rewardType, amount });
+          }
         }
 
-        set({
+        // 应用资产变化
+        set((s) => ({
           pityCounter: newPity,
           fragments: newFragments,
           skins: newSkins,
-        });
+          gold: s.gold + goldGain,
+          diamond: s.diamond + diamondGain,
+          keys: s.keys + keysGain,
+        }));
         return results;
       },
 
