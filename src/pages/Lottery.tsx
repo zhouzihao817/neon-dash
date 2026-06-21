@@ -1,20 +1,31 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useGameStore } from "../game/store";
+import { useGameStore, type LotteryResult } from "../game/store";
 import { audio } from "../game/audio";
 import {
   SKINS,
   LOTTERY,
+  LOTTERY_REWARDS,
   RARITY_NAMES,
   RARITY_COLORS,
+  getSkinEffects,
+  getSkinEffectDisplay,
   type Rarity,
+  type LotteryRewardType,
 } from "../game/config";
 
-interface LotteryResult {
-  rarity: Rarity;
-  skinId: string;
-  isNew: boolean;
-}
+// 奖励类型展示信息(用于概率面板)
+const REWARD_TYPE_INFO: {
+  type: LotteryRewardType;
+  label: string;
+  icon: string;
+  color: string;
+}[] = [
+  { type: "gold", label: "金币", icon: "●", color: "#FFD700" },
+  { type: "diamond", label: "钻石", icon: "◆", color: "#00D4FF" },
+  { type: "keys", label: "钥匙", icon: "🔑", color: "#B44CFF" },
+  { type: "skin", label: "皮肤", icon: "★", color: "#FF2D95" },
+];
 
 export default function Lottery() {
   const navigate = useNavigate();
@@ -80,8 +91,8 @@ export default function Lottery() {
 
     await delay(600);
 
-    // 检查是否有传说
-    const hasLegendary = res.some((r) => r.rarity === 3);
+    // 检查是否有传说皮肤
+    const hasLegendary = res.some((r) => r.type === "skin" && r.rarity === 3);
     if (hasLegendary) {
       audio.sfxLegendary();
     }
@@ -197,11 +208,45 @@ export default function Lottery() {
           <div className="font-orbitron text-sm neon-text-blue mb-2">
             ▸ 奖池概率
           </div>
+          {/* 奖励类型概率 */}
+          <div className="grid grid-cols-4 gap-2 mb-2">
+            {REWARD_TYPE_INFO.map((info) => {
+              const cfg = LOTTERY_REWARDS.find((r) => r.type === info.type)!;
+              const totalWeight = LOTTERY_REWARDS.reduce(
+                (sum, r) => sum + r.weight,
+                0,
+              );
+              return (
+                <div
+                  key={info.type}
+                  className="p-2 rounded-lg text-center"
+                  style={{
+                    border: `1px solid ${info.color}40`,
+                    background: `${info.color}10`,
+                  }}
+                >
+                  <div
+                    className="font-orbitron text-xs"
+                    style={{ color: info.color }}
+                  >
+                    {info.icon} {info.label}
+                  </div>
+                  <div className="font-mono text-xs text-neon-blue/60">
+                    {((cfg.weight / totalWeight) * 100).toFixed(0)}%
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* 皮肤稀有度概率(抽到皮肤时的条件概率) */}
+          <div className="font-mono text-[10px] text-neon-blue/40 mb-1">
+            皮肤稀有度(抽到皮肤时)
+          </div>
           <div className="grid grid-cols-4 gap-2">
             {RARITY_NAMES.map((name, i) => (
               <div
                 key={i}
-                className="p-2 rounded-lg text-center"
+                className="p-1.5 rounded-lg text-center"
                 style={{
                   border: `1px solid ${RARITY_COLORS[i]}40`,
                   background: `${RARITY_COLORS[i]}10`,
@@ -287,43 +332,74 @@ export default function Lottery() {
               }`}
             >
               {results.map((r, i) => {
-                const skin = SKINS.find((s) => s.id === r.skinId)!;
-                const color = RARITY_COLORS[r.rarity];
+                // 根据奖励类型获取展示信息
+                const display = getRewardDisplay(r);
                 return (
                   <div
                     key={i}
                     className="p-3 rounded-xl text-center animate-float"
                     style={{
-                      border: `2px solid ${color}`,
-                      boxShadow: `0 0 20px ${color}`,
-                      background: `${color}10`,
+                      border: `2px solid ${display.color}`,
+                      boxShadow: `0 0 20px ${display.color}`,
+                      background: `${display.color}10`,
                       animationDelay: `${i * 0.1}s`,
                     }}
                   >
-                    {r.isNew && (
+                    {r.type === "skin" && r.isNew && (
                       <div className="font-orbitron text-xs neon-text-gold mb-1">
                         NEW!
                       </div>
                     )}
                     <div
-                      className="w-12 h-12 mx-auto rounded-full mb-2"
+                      className="w-12 h-12 mx-auto rounded-full mb-2 flex items-center justify-center text-2xl"
                       style={{
-                        background: skin.color,
-                        boxShadow: `0 0 15px ${skin.color}`,
+                        background:
+                          r.type === "skin"
+                            ? display.bg
+                            : `${display.color}20`,
+                        boxShadow: `0 0 15px ${display.color}`,
+                        color: display.color,
                       }}
-                    />
+                    >
+                      {r.type === "skin" ? "" : display.icon}
+                    </div>
                     <div
                       className="font-orbitron text-xs mb-1"
-                      style={{ color: color }}
+                      style={{ color: display.color }}
                     >
-                      {RARITY_NAMES[r.rarity]}
+                      {display.label}
                     </div>
                     <div
                       className="font-mono text-xs"
-                      style={{ color: skin.color }}
+                      style={{ color: display.color }}
                     >
-                      {skin.name}
+                      {display.value}
                     </div>
+                    {/* 皮肤被动效果展示 */}
+                    {r.type === "skin" &&
+                      r.skinId &&
+                      getSkinEffects(r.skinId).length > 0 && (
+                        <div className="mt-2 space-y-0.5">
+                          {getSkinEffects(r.skinId).map((eff, ei) => {
+                            const disp = getSkinEffectDisplay(eff);
+                            return (
+                              <div
+                                key={ei}
+                                className="flex items-center justify-center gap-1 px-1 py-0.5 rounded text-[9px] font-mono"
+                                style={{
+                                  background: `${disp.color}20`,
+                                  border: `1px solid ${disp.color}50`,
+                                  color: disp.color,
+                                }}
+                                title={disp.label}
+                              >
+                                <span className="leading-none">{disp.icon}</span>
+                                <span className="truncate">{disp.desc}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                   </div>
                 );
               })}
@@ -343,6 +419,54 @@ export default function Lottery() {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 根据抽奖结果类型获取展示信息(颜色/图标/标签/数值)
+function getRewardDisplay(r: LotteryResult): {
+  color: string;
+  icon: string;
+  label: string;
+  value: string;
+  bg: string;
+} {
+  if (r.type === "skin") {
+    const skin = SKINS.find((s) => s.id === r.skinId);
+    const rarity = (r.rarity ?? 0) as Rarity;
+    const color = RARITY_COLORS[rarity];
+    return {
+      color,
+      icon: "",
+      label: RARITY_NAMES[rarity],
+      value: skin?.name ?? "未知皮肤",
+      bg: skin?.color ?? color,
+    };
+  }
+  if (r.type === "gold") {
+    return {
+      color: "#FFD700",
+      icon: "●",
+      label: "金币",
+      value: `+${r.amount ?? 0}`,
+      bg: "#FFD700",
+    };
+  }
+  if (r.type === "diamond") {
+    return {
+      color: "#00D4FF",
+      icon: "◆",
+      label: "钻石",
+      value: `+${r.amount ?? 0}`,
+      bg: "#00D4FF",
+    };
+  }
+  // keys
+  return {
+    color: "#B44CFF",
+    icon: "🔑",
+    label: "钥匙",
+    value: `+${r.amount ?? 0}`,
+    bg: "#B44CFF",
+  };
 }
 
 function Chest({
