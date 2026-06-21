@@ -6,6 +6,8 @@ import {
   POWERUPS,
   RARITY_NAMES,
   RARITY_COLORS,
+  getSkinEffects,
+  getSkinEffectDisplay,
   type PowerUpType,
 } from "../game/config";
 
@@ -144,6 +146,30 @@ export default function Shop() {
                   <div className="font-mono text-xs text-neon-blue/50 text-center mb-2 h-8 overflow-hidden">
                     {skin.description}
                   </div>
+
+                  {/* 皮肤被动效果 */}
+                  {getSkinEffects(skin.id).length > 0 && (
+                    <div className="mb-2 space-y-1">
+                      {getSkinEffects(skin.id).map((eff, ei) => {
+                        const disp = getSkinEffectDisplay(eff);
+                        return (
+                          <div
+                            key={ei}
+                            className="flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] font-mono"
+                            style={{
+                              background: `${disp.color}15`,
+                              border: `1px solid ${disp.color}40`,
+                              color: disp.color,
+                            }}
+                            title={disp.label}
+                          >
+                            <span className="text-xs leading-none">{disp.icon}</span>
+                            <span className="truncate">{disp.desc}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* 操作按钮 */}
                   {owned ? (

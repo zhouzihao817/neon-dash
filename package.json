@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "check": "tsc -b --noEmit",
     "deploy:cf": "npm run build && wrangler pages deploy dist --project-name neon-dash",
-    "preview:cf": "npm run build && wrangler pages deploy dist --project-name neon-dash --branch preview"
+    "preview:cf": "npm run build && wrangler pages deploy dist --project-name neon-dash --branch preview",
+    "server:dev": "cd server && npm run dev",
+    "server:build": "cd server && npm run build"
   },
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",
